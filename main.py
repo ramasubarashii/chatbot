@@ -1,249 +1,220 @@
-# Impor pustaka (library) yang diperlukan
-import google.generativeai as genai
 import streamlit as st
+import google.generativeai as genai
 import os
-from dotenv import load_dotenv
-import PyPDF2
-import tempfile
+from io import BytesIO
+from docx import Document
+from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+import pandas as pd
+import docx2txt
+import fitz  
 
-# Muat variabel lingkungan dari file .env (untuk menyimpan kunci API)
-load_dotenv()
+# ---------------- CONFIG ----------------
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-st.title("🤖 AI Assistant with Role-Play & Knowledge Base")
+# ---------------- STATE INIT ----------------
+if "topics" not in st.session_state:
+    st.session_state.topics = {"Default": []}
+if "current_topic" not in st.session_state:
+    st.session_state.current_topic = "Default"
+if "language" not in st.session_state:
+    st.session_state.language = "Indonesia"
+if "analysis_result" not in st.session_state:
+    st.session_state.analysis_result = None
+if "analysis_structured" not in st.session_state:
+    st.session_state.analysis_structured = None
 
-# Konfigurasi Gemini API menggunakan kunci yang diambil dari environment
-genai.configure(api_key=os.getenv("GOOGLEL_API_KEY"))
+# ---------------- SIDEBAR ----------------
+st.sidebar.title("⚙️ Pengaturan")
 
-# Daftar peran (role) yang telah ditentukan sebelumnya untuk AI
-# Setiap peran memiliki prompt sistem (perintah) dan ikon sendiri
-ROLES = {
-    "General Assistant": {
-        "system_prompt": "You are a helpful AI assistant. Be friendly, informative, and professional.",
-        "icon": "🤖",
-    },
-    "Customer Service": {
-        "system_prompt": """You are a professional customer service representative. You should:
-        - Be polite, empathetic, and patient
-        - Focus on solving customer problems
-        - Ask clarifying questions when needed
-        - Offer alternatives and solutions
-        - Maintain a helpful and positive tone
-        - If you can't solve something, explain how to escalate""",
-        "icon": "📞",
-    },
-    "Technical Support": {
-        "system_prompt": """You are a technical support specialist. You should:
-        - Provide clear, step-by-step technical solutions
-        - Ask about system specifications and error messages
-        - Suggest troubleshooting steps in logical order
-        - Explain technical concepts in simple terms
-        - Be patient with non-technical users""",
-        "icon": "⚙️",
-    },
-    "Teacher/Tutor": {
-        "system_prompt": """You are an educational tutor. You should:
-        - Explain concepts clearly and simply
-        - Use examples and analogies to aid understanding
-        - Encourage learning and curiosity
-        - Break down complex topics into manageable parts
-        - Provide practice questions or exercises when appropriate""",
-        "icon": "📚",
-    },
-}
+lang_choice = st.sidebar.radio("Pilih Bahasa", ["Indonesia", "English"])
+st.session_state.language = lang_choice
 
+st.sidebar.subheader("🗂 Manajemen Topik")
+topic_names = list(st.session_state.topics.keys())
+selected_topic = st.sidebar.selectbox(
+    "Pilih Topik", topic_names, index=topic_names.index(st.session_state.current_topic)
+)
+st.session_state.current_topic = selected_topic
 
-# Fungsi untuk mengekstrak teks dari file PDF yang diunggah
-def extract_text_from_pdf(pdf_file):
-    """Mengekstrak teks dari file PDF yang diunggah"""
-    try:
-        # Buat file sementara untuk menyimpan PDF yang diunggah
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(pdf_file.getvalue())
-            tmp_file_path = tmp_file.name
+new_topic = st.sidebar.text_input("Buat Topik Baru")
+if st.sidebar.button("➕ Tambah Topik") and new_topic:
+    if new_topic not in st.session_state.topics:
+        st.session_state.topics[new_topic] = []
+        st.session_state.current_topic = new_topic
 
-        # Buka dan baca file PDF sementara
-        with open(tmp_file_path, "rb") as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            text = ""
-            # Loop setiap halaman dalam PDF untuk mengambil teksnya
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
+# ---------------- MAIN ----------------
+st.title("🤖 Chatbot Analisis Value Chain")
 
-        # Hapus file sementara setelah selesai diproses
-        os.unlink(tmp_file_path)
-        return text
-    except Exception as e:
-        # Tampilkan pesan error jika gagal mengekstrak teks
-        st.error(f"Error extracting PDF text: {str(e)}")
-        return None
+# ---- Upload File ----
+uploaded_file = st.file_uploader("📂 Upload laporan perusahaan (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"])
+file_content = None
 
+if uploaded_file:
+    if uploaded_file.type == "application/pdf":
+        pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        text = ""
+        for page in pdf:
+            text += page.get_text()
+        file_content = text
 
-# --- Bagian Sidebar untuk Konfigurasi ---
-with st.sidebar:
-    st.header("⚙️ Configuration")
+    elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        text = docx2txt.process(uploaded_file)
+        file_content = text
 
-    # Pilihan untuk mengubah peran (role) AI
-    st.subheader("🎭 Select Role")
-    selected_role = st.selectbox(
-        "Choose assistant role:", options=list(ROLES.keys()), index=0
-    )
+    elif uploaded_file.type == "text/plain":
+        text = uploaded_file.read().decode("utf-8")
+        file_content = text
 
-    # Bagian untuk mengunggah file PDF sebagai basis pengetahuan (knowledge base)
-    st.subheader("📚 Knowledge Base")
-    uploaded_files = st.file_uploader(
-        "Upload PDF documents:", type=["pdf"], accept_multiple_files=True
-    )
+    if file_content:
+        st.success("✅ File berhasil dibaca, siap dianalisis.")
 
-    # Proses file yang diunggah
-    if uploaded_files:
-        # Inisialisasi 'knowledge_base' di session_state jika belum ada
-        if "knowledge_base" not in st.session_state:
-            st.session_state.knowledge_base = ""
+        if st.button("🔎 Analisis Value Chain dari Dokumen"):
+            instruction = f"""
+            Berdasarkan dokumen berikut, buat analisis Value Chain perusahaan.
+            Dokumen: {file_content[:5000]}  # potong max 5000 char agar tidak kepanjangan
 
-        # Ekstrak teks dari file-file yang baru diunggah
-        new_knowledge = ""
-        for pdf_file in uploaded_files:
-            st.write(f"📄 Processing: {pdf_file.name}")
-            pdf_text = extract_text_from_pdf(pdf_file)
-            if pdf_text:
-                # Tambahkan teks dari PDF ke variabel dengan format penanda
-                new_knowledge += f"\n\n=== DOCUMENT: {pdf_file.name} ===\n{pdf_text}"
+            Jawaban harus berformat (bahasa {st.session_state.language}):
 
-        # Perbarui basis pengetahuan jika ada konten baru dan belum ada sebelumnya
-        if new_knowledge and new_knowledge not in st.session_state.knowledge_base:
-            st.session_state.knowledge_base += new_knowledge
-            st.success(f"✅ Processed {len(uploaded_files)} document(s)")
+            ### Value Chain
+            - Aktivitas Utama:
+              1. ...
+              2. ...
+            - Aktivitas Pendukung:
+              1. ...
+              2. ...
 
-    # Tombol untuk menghapus seluruh basis pengetahuan
-    if st.button("🗑️ Clear Knowledge Base"):
-        st.session_state.knowledge_base = ""
-        st.success("Knowledge base cleared!")
+            ### Masalah
+            - ...
 
-    # Tampilkan status basis pengetahuan (jumlah kata)
-    if "knowledge_base" in st.session_state and st.session_state.knowledge_base:
-        word_count = len(st.session_state.knowledge_base.split())
-        st.metric("Knowledge Base", f"{word_count} words")
+            ### Solusi
+            - ...
 
-# --- Inisialisasi Session State ---
-# Session state digunakan untuk menyimpan data antar interaksi pengguna
-
-# Inisialisasi model Gemini jika belum ada
-if "gemini_model" not in st.session_state:
-    st.session_state["gemini_model"] = "gemini-1.5-flash"
-
-# Inisialisasi riwayat pesan jika belum ada
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Inisialisasi peran saat ini jika belum ada
-if "current_role" not in st.session_state:
-    st.session_state.current_role = selected_role
-
-# Atur ulang percakapan jika pengguna mengganti peran AI
-if st.session_state.current_role != selected_role:
-    st.session_state.messages = []  # Kosongkan riwayat chat
-    st.session_state.current_role = selected_role
-    st.rerun()  # Muat ulang aplikasi untuk menerapkan perubahan
-
-# --- Antarmuka Chat Utama ---
-
-# Tampilkan peran yang sedang aktif
-st.markdown(f"**Current Role:** {ROLES[selected_role]['icon']} {selected_role}")
-
-# Tampilkan riwayat percakapan dari sesi sebelumnya
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Input chat dari pengguna
-if prompt := st.chat_input("What can I help you with?"):
-    # Tambahkan pesan pengguna ke riwayat chat
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Hasilkan respons dari asisten AI
-    with st.chat_message("assistant"):
-        # Inisialisasi model Generative AI
-        model = genai.GenerativeModel(st.session_state["gemini_model"])
-
-        # Bangun prompt sistem dengan instruksi peran
-        system_prompt = ROLES[selected_role]["system_prompt"]
-
-        # Tambahkan konteks dari basis pengetahuan jika tersedia
-        if "knowledge_base" in st.session_state and st.session_state.knowledge_base:
-            system_prompt += f"""
-
-            IMPORTANT: You have access to the following knowledge base from uploaded documents. Use this information to answer questions when relevant:
-
-            {st.session_state.knowledge_base}
-
-            When answering questions, prioritize information from the knowledge base when applicable. If the answer is found in the uploaded documents, mention which document it came from.
+            ### Proposal
+            1. Latar Belakang
+            2. Identifikasi Masalah
+            3. Solusi yang Diusulkan
+            4. Rekomendasi
             """
+            response = model.generate_content(instruction)
+            answer = response.text
+            st.session_state.analysis_result = answer
+            st.session_state.topics[st.session_state.current_topic].append(("assistant", answer))
+            st.write(answer)
 
-        # Konversi riwayat pesan ke format yang sesuai untuk Gemini
-        chat_history = []
+# ---- Chat Mode ----
+for role, msg in st.session_state.topics[st.session_state.current_topic]:
+    if role == "user":
+        st.chat_message("user").write(msg)
+    else:
+        st.chat_message("assistant").write(msg)
 
-        # Tambahkan prompt sistem sebagai pesan pertama jika ini awal percakapan
-        if not st.session_state.messages[:-1]:
-            chat_history.append({"role": "user", "parts": [system_prompt]})
-            chat_history.append(
-                {
-                    "role": "model",
-                    "parts": [
-                        "I understand. I'll act according to my role and use the knowledge base when relevant. How can I help you?"
-                    ],
-                }
-            )
+prompt = st.chat_input("Ketik pertanyaan atau perintah...")
+if prompt:
+    st.session_state.topics[st.session_state.current_topic].append(("user", prompt))
+    st.chat_message("user").write(prompt)
 
-        # Tambahkan riwayat percakapan sebelumnya (semua kecuali pesan terakhir dari pengguna)
-        for msg in st.session_state.messages[:-1]:
-            role = "user" if msg["role"] == "user" else "model"
-            chat_history.append({"role": role, "parts": [msg["content"]]})
-
-        # Mulai sesi chat dengan riwayat yang sudah ada
-        chat = model.start_chat(history=chat_history)
-
-        # Gabungkan prompt sistem dengan pertanyaan pengguna hanya untuk interaksi pertama
-        if not st.session_state.messages[:-1]:
-            full_prompt = f"{system_prompt}\n\nUser question: {prompt}"
+    if "value chain" in prompt.lower():
+        instruction = f"""
+        Analisa value chain dari perusahaan sesuai prompt berikut: {prompt}.
+        Jawaban harus memiliki format (bahasa {st.session_state.language}):
+        ### Value Chain
+        - Aktivitas Utama:
+        - Aktivitas Pendukung:
+        ### Masalah
+        ### Solusi
+        ### Proposal
+        """
+        response = model.generate_content(instruction)
+        answer = response.text
+        st.session_state.analysis_result = answer
+    else:
+        if st.session_state.language == "Indonesia":
+            response = model.generate_content(f"Jawablah dalam bahasa Indonesia: {prompt}")
         else:
-            full_prompt = prompt
+            response = model.generate_content(f"Answer in English: {prompt}")
+        answer = response.text
 
-        # Kirim pesan dan dapatkan respons secara streaming
-        response = chat.send_message(full_prompt, stream=True)
+    st.session_state.topics[st.session_state.current_topic].append(("assistant", answer))
+    st.chat_message("assistant").write(answer)
 
-        # Tampilkan respons secara streaming (efek ketikan)
-        response_text = ""
-        response_container = st.empty()
-        for chunk in response:
-            if chunk.text:
-                response_text += chunk.text
-                # Tambahkan kursor berkedip untuk efek visual
-                response_container.markdown(response_text + "▌")
+# ---------------- EXPORT ----------------
+st.subheader("📑 Ekspor Proposal / Hasil Analisis")
 
-        # Tampilkan respons final tanpa kursor
-        response_container.markdown(response_text)
+def export_to_docx(topic_name, text):
+    doc = Document()
+    doc.add_heading(f"Hasil Analisis - {topic_name}", level=1)
+    doc.add_paragraph(text)
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
-    # Tambahkan respons dari asisten ke riwayat chat untuk ditampilkan di interaksi selanjutnya
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
+def export_to_pdf(topic_name, text):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    content = [Paragraph(f"<b>Hasil Analisis - {topic_name}</b>", styles["Heading1"])]
+    content.append(Paragraph(text.replace("\n", "<br/>"), styles["Normal"]))
+    doc.build(content)
+    buffer.seek(0)
+    return buffer
 
-# --- Petunjuk Penggunaan di Bagian Bawah ---
-with st.expander("ℹ️ How to use"):
-    st.markdown("""
-    ### Role-Playing:
-    - Select different roles from the sidebar
-    - Each role has specific behavior and expertise
-    - The conversation resets when you change roles
+def export_to_excel(topic_name, text):
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        data = []
+        for role, msg in st.session_state.topics[st.session_state.current_topic]:
+            data.append({"Role": role, "Message": msg})
+        df_chat = pd.DataFrame(data)
+        df_chat.to_excel(writer, sheet_name="Chat History", index=False)
 
-    ### Knowledge Base:
-    - Upload PDF documents in the sidebar
-    - Ask questions about the content in your documents
-    - The AI will reference the uploaded documents when answering
-    - You can upload multiple PDFs
+        if text:
+            lines = text.splitlines()
+            primary, support, problems, solutions = [], [], [], []
+            section = None
+            for line in lines:
+                if "Aktivitas Utama" in line:
+                    section = "primary"
+                elif "Aktivitas Pendukung" in line:
+                    section = "support"
+                elif "Masalah" in line:
+                    section = "problem"
+                elif "Solusi" in line:
+                    section = "solution"
+                elif line.strip().startswith("-") or line.strip().startswith("1."):
+                    content = line.strip("-1234567890. ").strip()
+                    if section == "primary": primary.append(content)
+                    elif section == "support": support.append(content)
+                    elif section == "problem": problems.append(content)
+                    elif section == "solution": solutions.append(content)
 
-    ### Tips:
-    - Be specific in your questions for better answers
-    - The AI will mention which document information came from
-    - Clear the knowledge base to start fresh
-    """)
+            df_vc = pd.DataFrame({
+                "Aktivitas Utama": primary + [""]*(max(len(support), len(problems), len(solutions)) - len(primary)),
+                "Aktivitas Pendukung": support + [""]*(max(len(primary), len(problems), len(solutions)) - len(support)),
+                "Masalah": problems + [""]*(max(len(primary), len(support), len(solutions)) - len(problems)),
+                "Solusi": solutions + [""]*(max(len(primary), len(support), len(problems)) - len(solutions)),
+            })
+            df_vc.to_excel(writer, sheet_name="Value Chain", index=False)
+
+        if text:
+            df_proposal = pd.DataFrame({"Proposal": [text]})
+            df_proposal.to_excel(writer, sheet_name="Proposal", index=False)
+
+    buffer.seek(0)
+    return buffer
+
+if st.session_state.analysis_result:
+    st.success("✅ Analisis tersedia, ekspor sekarang!")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        docx_data = export_to_docx(st.session_state.current_topic, st.session_state.analysis_result)
+        st.download_button("⬇️ Word", docx_data, file_name="proposal.docx")
+    with col2:
+        pdf_data = export_to_pdf(st.session_state.current_topic, st.session_state.analysis_result)
+        st.download_button("⬇️ PDF", pdf_data, file_name="proposal.pdf")
+    with col3:
+        excel_data = export_to_excel(st.session_state.current_topic, st.session_state.analysis_result)
+        st.download_button("⬇️ Excel", excel_data, file_name="proposal.xlsx")
