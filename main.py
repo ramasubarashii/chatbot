@@ -70,12 +70,18 @@ if uploaded_file:
     if file_content:
         st.success("✅ File berhasil dibaca, siap dianalisis.")
 
-        if st.button("🔎 Analisis Value Chain dari Dokumen"):
+        # ✅ tombol baru pakai keyword list of company pain problems and possible solutions
+        if st.button("🔎 Analisis List of Company pain problems and possible solutions dari Dokumen"):
             instruction = f"""
-            Berdasarkan dokumen berikut, buat analisis Value Chain perusahaan.
+            Berdasarkan dokumen berikut, pertama-tama jelaskan secara ringkas tentang objek perusahaan/industri
+            yang dianalisis (misalnya: bidang usaha, produk utama, posisi di pasar, dsb).
+
             Dokumen: {file_content[:5000]}  # potong max 5000 char agar tidak kepanjangan
 
-            Jawaban harus berformat (bahasa {st.session_state.language}):
+            Setelah itu, buat analisis Value Chain perusahaan dengan format (bahasa {st.session_state.language}):
+
+            ### Objek Analisis
+            - Deskripsi singkat perusahaan / industri
 
             ### Value Chain
             - Aktivitas Utama:
@@ -115,16 +121,35 @@ if prompt:
     st.session_state.topics[st.session_state.current_topic].append(("user", prompt))
     st.chat_message("user").write(prompt)
 
-    if "value chain" in prompt.lower():
+    # ✅ trigger keyword baru
+    if "list of company pain problems and possible solutions" in prompt.lower():
         instruction = f"""
-        Analisa value chain dari perusahaan sesuai prompt berikut: {prompt}.
+        Berdasarkan prompt berikut: {prompt}.
+        Pertama, jelaskan secara ringkas tentang objek perusahaan/industri yang ingin dianalisis
+        (contoh: bidang usaha, produk utama, posisi di pasar, dsb).
+
+        Setelah itu, lanjutkan dengan analisis Value Chain perusahaan.
+
         Jawaban harus memiliki format (bahasa {st.session_state.language}):
+
+        ### Objek Analisis
+        - Deskripsi singkat perusahaan / industri
+
         ### Value Chain
         - Aktivitas Utama:
         - Aktivitas Pendukung:
+
         ### Masalah
+        - ...
+
         ### Solusi
+        - ...
+
         ### Proposal
+        1. Latar Belakang
+        2. Identifikasi Masalah
+        3. Solusi yang Diusulkan
+        4. Rekomendasi
         """
         response = model.generate_content(instruction)
         answer = response.text
@@ -138,6 +163,7 @@ if prompt:
 
     st.session_state.topics[st.session_state.current_topic].append(("assistant", answer))
     st.chat_message("assistant").write(answer)
+
 
 # ---------------- EXPORT ----------------
 st.subheader("📑 Ekspor Proposal / Hasil Analisis")
@@ -196,7 +222,7 @@ def export_to_excel(topic_name, text):
                 "Masalah": problems + [""]*(max(len(primary), len(support), len(solutions)) - len(problems)),
                 "Solusi": solutions + [""]*(max(len(primary), len(support), len(problems)) - len(solutions)),
             })
-            df_vc.to_excel(writer, sheet_name="Value Chain", index=False)
+            df_vc.to_excel(writer, sheet_name="List of Company pain problems and possible solutions", index=False)
 
         if text:
             df_proposal = pd.DataFrame({"Proposal": [text]})
