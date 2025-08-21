@@ -22,8 +22,6 @@ if "language" not in st.session_state:
     st.session_state.language = "Indonesia"
 if "analysis_result" not in st.session_state:
     st.session_state.analysis_result = None
-if "analysis_structured" not in st.session_state:
-    st.session_state.analysis_structured = None
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("⚙️ Pengaturan")
@@ -45,7 +43,7 @@ if st.sidebar.button("➕ Tambah Topik") and new_topic:
         st.session_state.current_topic = new_topic
 
 # ---------------- MAIN ----------------
-st.title("🤖 Chatbot Analisis Value Chain")
+st.title("Chatbot Industri Value Chain (IVCA)")
 
 # ---- Upload File ----
 uploaded_file = st.file_uploader("📂 Upload laporan perusahaan (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"])
@@ -70,26 +68,28 @@ if uploaded_file:
     if file_content:
         st.success("✅ File berhasil dibaca, siap dianalisis.")
 
-        # ✅ tombol baru pakai keyword list of company pain problems and possible solutions
-        if st.button("🔎 Analisis List of Company pain problems and possible solutions dari Dokumen"):
+        if st.button("🔎 Analisis Value Chain dari Dokumen"):
             instruction = f"""
-            Berdasarkan dokumen berikut, pertama-tama jelaskan secara ringkas tentang objek perusahaan/industri
-            yang dianalisis (misalnya: bidang usaha, produk utama, posisi di pasar, dsb).
+            Dari dokumen berikut, identifikasi terlebih dahulu objek perusahaan yang dianalisis
+            (nama perusahaan, bidang usaha, atau gambaran umum berdasarkan teks).
+            Setelah itu lanjutkan dengan analisis Value Chain, Masalah, Solusi, dan Proposal.
 
-            Dokumen: {file_content[:5000]}  # potong max 5000 char agar tidak kepanjangan
+            Dokumen: {file_content[:5000]}
 
-            Setelah itu, buat analisis Value Chain perusahaan dengan format (bahasa {st.session_state.language}):
+            Jawaban harus berformat (bahasa {st.session_state.language}):
 
-            ### Objek Analisis
-            - Deskripsi singkat perusahaan / industri
+            ### Objek Perusahaan
+            - Nama/Deskripsi perusahaan
+            - Bidang industri
+            - Gambaran umum operasional
 
             ### Value Chain
-            - Aktivitas Utama:
-              1. ...
-              2. ...
-            - Aktivitas Pendukung:
-              1. ...
-              2. ...
+            #### Aktivitas Utama
+            - ...
+            - ...
+            #### Aktivitas Pendukung
+            - ...
+            - ...
 
             ### Masalah
             - ...
@@ -107,44 +107,42 @@ if uploaded_file:
             answer = response.text
             st.session_state.analysis_result = answer
             st.session_state.topics[st.session_state.current_topic].append(("assistant", answer))
-            st.write(answer)
+            st.markdown(answer)
 
 # ---- Chat Mode ----
 for role, msg in st.session_state.topics[st.session_state.current_topic]:
     if role == "user":
         st.chat_message("user").write(msg)
     else:
-        st.chat_message("assistant").write(msg)
+        st.chat_message("assistant").markdown(msg)
 
 prompt = st.chat_input("Ketik pertanyaan atau perintah...")
 if prompt:
     st.session_state.topics[st.session_state.current_topic].append(("user", prompt))
     st.chat_message("user").write(prompt)
 
-    # ✅ trigger keyword baru
-    if "list of company pain problems and possible solutions" in prompt.lower():
+    if "value chain" in prompt.lower() or "list of company pain problems and possible solutions" in prompt.lower():
         instruction = f"""
-        Berdasarkan prompt berikut: {prompt}.
-        Pertama, jelaskan secara ringkas tentang objek perusahaan/industri yang ingin dianalisis
-        (contoh: bidang usaha, produk utama, posisi di pasar, dsb).
+        Pertama-tama, jelaskan objek perusahaan yang dianalisis (nama, bidang, gambaran umum).
+        Setelah itu lanjutkan analisis sesuai prompt berikut: {prompt}.
 
-        Setelah itu, lanjutkan dengan analisis Value Chain perusahaan.
+        Jawaban harus berformat (bahasa {st.session_state.language}):
 
-        Jawaban harus memiliki format (bahasa {st.session_state.language}):
-
-        ### Objek Analisis
-        - Deskripsi singkat perusahaan / industri
+        ### Objek Perusahaan
+        - Nama/Deskripsi perusahaan
+        - Bidang industri
+        - Gambaran umum operasional
 
         ### Value Chain
-        - Aktivitas Utama:
-        - Aktivitas Pendukung:
+        #### Aktivitas Utama
+        - ...
+        #### Aktivitas Pendukung
+        - ...
 
         ### Masalah
         - ...
-
         ### Solusi
         - ...
-
         ### Proposal
         1. Latar Belakang
         2. Identifikasi Masalah
@@ -162,8 +160,7 @@ if prompt:
         answer = response.text
 
     st.session_state.topics[st.session_state.current_topic].append(("assistant", answer))
-    st.chat_message("assistant").write(answer)
-
+    st.chat_message("assistant").markdown(answer)
 
 # ---------------- EXPORT ----------------
 st.subheader("📑 Ekspor Proposal / Hasil Analisis")
@@ -222,7 +219,7 @@ def export_to_excel(topic_name, text):
                 "Masalah": problems + [""]*(max(len(primary), len(support), len(solutions)) - len(problems)),
                 "Solusi": solutions + [""]*(max(len(primary), len(support), len(problems)) - len(solutions)),
             })
-            df_vc.to_excel(writer, sheet_name="List of Company pain problems and possible solutions", index=False)
+            df_vc.to_excel(writer, sheet_name="Value Chain", index=False)
 
         if text:
             df_proposal = pd.DataFrame({"Proposal": [text]})
